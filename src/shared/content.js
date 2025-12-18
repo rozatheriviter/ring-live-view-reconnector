@@ -2,14 +2,13 @@
 const DEBUG = true;
 
 // Immediately log that the script is loaded
-console.log('[Ring Reconnector] Content script loaded and initialized');
+console.log('[Ring Reconnector] Content script loaded and initialized (Overkill Mode)');
 
 // Function to check if we're in Firefox
 const isFirefox = typeof browser !== 'undefined';
 console.log(`[Ring Reconnector] Running in ${isFirefox ? 'Firefox' : 'Chrome'}`);
 
 function debugLog(message, isImportant = false) {
-    // Always log during initial setup
     if (DEBUG && (isImportant || !document.body)) {
         console.log(`[Ring Reconnector Debug] ${message}`);
     }
@@ -18,7 +17,6 @@ function debugLog(message, isImportant = false) {
 // Function to inject styles once document.head is available
 function injectStyles() {
     if (!document.head) {
-        debugLog('Document head not available, will retry...', true);
         return false;
     }
 
@@ -35,7 +33,7 @@ function injectStyles() {
             right: 68px;
             width: 22px;
             height: 24px;
-            z-index: 9999;
+            z-index: 2147483647; /* Max z-index */
             opacity: 0;
             transition: opacity 0.3s ease-in-out;
             pointer-events: none;
@@ -57,7 +55,6 @@ function injectStyles() {
         }
     `;
     document.head.appendChild(style);
-    debugLog('Styles injected successfully', true);
     return true;
 }
 
@@ -82,18 +79,14 @@ function initialize() {
                 <circle cx="15" cy="15" r="12" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="56 20"/>
             </svg>
         `;
-        debugLog('Notification element created', true);
 
         // Function to ensure notification is in the correct position
         function insertNotification() {
-            debugLog('Attempting to insert notification', true);
-            const header = document.querySelector('[data-testid="video-player-header"]');
+            // Try to find a stable container
+            const header = document.querySelector('[data-testid="video-player-header"]') || document.body;
             if (header) {
-                debugLog('Found video player header', true);
-                const closeButton = header.querySelector('.styled__CloseButton-sc-28f689ba-0');
-                if (closeButton) {
-                    debugLog('Found close button, inserting notification', true);
-                    closeButton.parentNode.insertBefore(notification, closeButton);
+                if (!document.body.contains(notification)) {
+                    document.body.appendChild(notification);
                     return true;
                 }
             }
@@ -106,138 +99,213 @@ function initialize() {
             notification.classList.add('show');
             setTimeout(() => {
                 notification.classList.remove('show');
-                debugLog('Hiding reconnection notification', true);
             }, 2000);
+        }
+
+        // --- OVERKILL UTILITIES ---
+
+        /**
+         * Simulates a full mouse click sequence on an element.
+         * React and other frameworks often listen to specific events.
+         */
+        function simulateClick(element) {
+            const events = ['mouseover', 'mousedown', 'mouseup', 'click'];
+            events.forEach(eventType => {
+                const event = new MouseEvent(eventType, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    buttons: 1
+                });
+                element.dispatchEvent(event);
+            });
+            // Also try native click if available
+            if (typeof element.click === 'function') {
+                element.click();
+            }
+        }
+
+        /**
+         * Recursively traverses the DOM, including open Shadow Roots.
+         * Yields every element found.
+         */
+        function* traverseDOM(root) {
+            if (!root) return;
+
+            const walker = document.createTreeWalker(
+                root,
+                NodeFilter.SHOW_ELEMENT,
+                null,
+                false
+            );
+
+            let node = walker.nextNode();
+            while (node) {
+                yield node;
+
+                // If the element has an open shadow root, traverse it
+                if (node.shadowRoot) {
+                    yield* traverseDOM(node.shadowRoot);
+                }
+
+                node = walker.nextNode();
+            }
+        }
+
+        /**
+         * Checks if an element is visible.
+         */
+        function isVisible(elem) {
+            if (!elem) return false;
+            // Basic checks
+            if (elem.style && (elem.style.display === 'none' || elem.style.visibility === 'hidden')) return false;
+            if (elem.hasAttribute('hidden')) return false;
+
+            // Expensive check, but needed for accuracy
+            const rect = elem.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }
+
+        // Target Texts (Lowercase for case-insensitive matching)
+        const RECONNECT_TEXTS = [
+            'reconnect',
+            'reconnect again',
+            'verbindung wiederherstellen',
+            'reconectar',
+            'reconnecter',
+            'riconnetti',
+            'opnieuw verbinden',
+            'yeniden bağlan',
+            'připojit znovu',
+            'połącz ponownie',
+            'переподключиться',
+            'újracsatlakozás',
+            '重新连接',
+            '再接続'
+        ];
+
+        function isReconnectButton(element) {
+            // 1. Check for button-like traits
+            const isButtonTag = element.tagName === 'BUTTON';
+            const isButtonRole = element.getAttribute('role') === 'button';
+            const isClickableDiv = (element.tagName === 'DIV' || element.tagName === 'A' || element.tagName === 'SPAN') &&
+                                   (element.className.toLowerCase().includes('btn') || element.className.toLowerCase().includes('button'));
+
+            if (!isButtonTag && !isButtonRole && !isClickableDiv) {
+                return false;
+            }
+
+            // 2. Check text content (deep)
+            // We use innerText to get visible text, or textContent as fallback
+            const text = (element.innerText || element.textContent || '').trim().toLowerCase();
+            if (!text) return false;
+
+            // 3. Match against known strings
+            // Exact match or includes? "Reconnect" is short, so includes might be risky (e.g. "Disconnect").
+            // But "Reconnect Again" contains "Reconnect".
+            // Let's use `includes` but be careful.
+
+            // To prevent false positives like "Disconnect", we check if it includes target texts.
+            // But "Disconnect" doesn't include "Reconnect".
+            return RECONNECT_TEXTS.some(target => text.includes(target));
         }
 
         // Function to click the reconnect button
         function clickReconnectButton() {
-            // Method 1: Look for the specific modal and button
-            const modal = document.querySelector('[data-testid="live-view__global-reconnect-modal"]');
-            if (modal) {
-                debugLog('Found reconnect modal', true);
-                const reconnectButton = modal.querySelector('button[data-testid="modal__accept-button"]');
-                if (reconnectButton) {
-                    debugLog('Clicking reconnect button...', true);
-                    reconnectButton.click();
-                    showReconnectNotification();
-                    return true;
-                }
-            }
-
-            // Method 1.5: Look for the button directly without requiring the modal
-            const directButton = document.querySelector('button[data-testid="modal__accept-button"]');
-            if (directButton) {
-                debugLog('Found reconnect button directly (without modal)...', true);
-                directButton.click();
-                showReconnectNotification();
-                return true;
-            }
-
-            // Method 2: Backup - look for any button with reconnect text in various languages
-            const reconnectTexts = [
-                'Reconnect',                    // English
-                'Reconnect Again',              // English variation
-                'Verbindung wiederherstellen',  // German
-                'Reconectar',                   // Spanish
-                'Reconnecter',                  // French
-                'Riconnetti',                   // Italian
-                'Opnieuw verbinden',            // Dutch
-                'Yeniden bağlan',               // Turkish
-                'Připojit znovu',               // Czech
-                'Połącz ponownie',              // Polish
-                'Переподключиться',             // Russian
-                'Újracsatlakozás',              // Hungarian
-                '重新连接',                      // Chinese (Simplified)
-                '再接続'                         // Japanese
+            // Method 1: Legacy Selectors (Fastest if they work)
+            const legacySelectors = [
+                'button[data-testid="modal__accept-button"]',
+                '[data-testid="live-view__global-reconnect-modal"] button'
             ];
-            
-            const allButtons = document.querySelectorAll('button');
-            for (const button of allButtons) {
-                const buttonText = (button.textContent || button.innerText || '').trim().toLowerCase();
 
-                if (!buttonText) continue;
-
-                if (reconnectTexts.some(text => buttonText.includes(text.toLowerCase()))) {
-                    debugLog(`Found and clicking reconnect button with text "${button.textContent.trim()}" (fuzzy method)...`, true);
-                    button.click();
+            for (const selector of legacySelectors) {
+                const btn = document.querySelector(selector);
+                if (btn && isVisible(btn)) {
+                    debugLog('Found reconnect button via legacy selector', true);
+                    simulateClick(btn);
                     showReconnectNotification();
                     return true;
                 }
             }
 
-            return false;
+            // Method 2: Overkill Deep Search (Shadow DOM + Fuzzy Text)
+            // We iterate EVERYTHING. This is heavy but "overkill" was requested.
+            // Optimization: Maybe only search if we suspect a modal is open?
+            // No, user said "forces user to click", implies it's visible.
+
+            // To avoid killing CPU, we limit this full scan frequency or break early.
+
+            let found = false;
+
+            // We traverse document.body
+            if (!document.body) return false;
+
+            // Strategy: Look for text nodes? Or just elements?
+            // Traversing elements is easier for checking attributes.
+            const allElements = traverseDOM(document.body);
+
+            for (const element of allElements) {
+                if (isReconnectButton(element) && isVisible(element)) {
+                    debugLog(`Found reconnect button via Deep Search: <${element.tagName}> "${element.innerText}"`, true);
+                    simulateClick(element);
+                    showReconnectNotification();
+                    found = true;
+                    // Don't return immediately, in case there are multiple (e.g. overlays), ensure we hit it.
+                    // But usually one is enough.
+                    return true;
+                }
+            }
+
+            return found;
         }
 
-        // Set up mutation observer
-        const observer = new MutationObserver((mutations) => {
-            const now = Date.now();
-            if (now - lastSignificantChange > SIGNIFICANT_CHANGE_THRESHOLD) {
-                const significantChanges = mutations.some(mutation => 
-                    (mutation.type === 'childList' && mutation.addedNodes.length > 0 &&
-                    Array.from(mutation.addedNodes).some(node => 
-                        node.nodeType === 1 && 
-                        (node.tagName === 'DIV' || node.tagName === 'BUTTON')
-                    )) ||
-                    (mutation.type === 'attributes')
-                );
+        // --- SCHEDULING ---
 
-                if (significantChanges) {
-                    lastSignificantChange = now;
-                    debugLog('Significant DOM changes detected', true);
-                    setTimeout(clickReconnectButton, 500);
-                }
+        // 1. MutationObserver: React to DOM changes
+        const observer = new MutationObserver((mutations) => {
+            // Debounce slightly?
+            // If significant nodes added or attributes changed
+            let shouldCheck = false;
+            for (const m of mutations) {
+                if (m.type === 'childList' && m.addedNodes.length > 0) shouldCheck = true;
+                if (m.type === 'attributes' && (m.attributeName === 'style' || m.attributeName === 'class' || m.attributeName === 'hidden')) shouldCheck = true;
+            }
+
+            if (shouldCheck) {
+                clickReconnectButton();
             }
         });
 
-        // Initialize variables
-        let lastSignificantChange = Date.now();
-        const SIGNIFICANT_CHANGE_THRESHOLD = 1000;
-
-        // Function to start observing
         function startObserving() {
             if (document.body) {
                 observer.observe(document.body, {
                     childList: true,
                     subtree: true,
                     attributes: true,
-                    attributeFilter: ['class', 'style', 'hidden']
+                    attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
                 });
-                debugLog('Mutation observer started', true);
                 return true;
             }
             return false;
         }
 
+        // 2. Polling: "Overkill" backup
+        // Run every 2 seconds regardless of mutations, just in case.
+        setInterval(clickReconnectButton, 2000);
+
         // Function to complete initialization
         function completeInitialization() {
-            // Try to inject styles
-            if (!injectStyles()) {
-                setTimeout(completeInitialization, 50);
-                return;
-            }
+            injectStyles();
+            startObserving();
+            insertNotification();
 
-            // Try to start observing
-            if (!startObserving()) {
-                setTimeout(completeInitialization, 50);
-                return;
-            }
+            // Initial check
+            clickReconnectButton();
 
-            // Try to insert notification if possible
-            if (document.body && !insertNotification()) {
-                setTimeout(insertNotification, 1000);
-            }
-
-            // Set up periodic check
-            setInterval(() => {
-                debugLog('Running periodic check', true);
-                clickReconnectButton();
-            }, 30000);
-
-            debugLog('Initialization complete', true);
+            debugLog('Initialization complete (Overkill Mode)', true);
         }
 
-        // Start the initialization process
+        // Start
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', completeInitialization);
         } else {
