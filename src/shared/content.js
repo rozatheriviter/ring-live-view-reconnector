@@ -137,6 +137,7 @@ function initialize() {
             // Method 2: Backup - look for any button with reconnect text in various languages
             const reconnectTexts = [
                 'Reconnect',                    // English
+                'Reconnect Again',              // English variation
                 'Verbindung wiederherstellen',  // German
                 'Reconectar',                   // Spanish
                 'Reconnecter',                  // French
@@ -153,9 +154,12 @@ function initialize() {
             
             const allButtons = document.querySelectorAll('button');
             for (const button of allButtons) {
-                const buttonText = button.textContent.trim();
-                if (reconnectTexts.some(text => buttonText.includes(text))) {
-                    debugLog(`Found and clicking reconnect button with text "${buttonText}" (backup method)...`, true);
+                const buttonText = (button.textContent || button.innerText || '').trim().toLowerCase();
+
+                if (!buttonText) continue;
+
+                if (reconnectTexts.some(text => buttonText.includes(text.toLowerCase()))) {
+                    debugLog(`Found and clicking reconnect button with text "${button.textContent.trim()}" (fuzzy method)...`, true);
                     button.click();
                     showReconnectNotification();
                     return true;
@@ -170,11 +174,12 @@ function initialize() {
             const now = Date.now();
             if (now - lastSignificantChange > SIGNIFICANT_CHANGE_THRESHOLD) {
                 const significantChanges = mutations.some(mutation => 
-                    mutation.addedNodes.length > 0 && 
+                    (mutation.type === 'childList' && mutation.addedNodes.length > 0 &&
                     Array.from(mutation.addedNodes).some(node => 
                         node.nodeType === 1 && 
                         (node.tagName === 'DIV' || node.tagName === 'BUTTON')
-                    )
+                    )) ||
+                    (mutation.type === 'attributes')
                 );
 
                 if (significantChanges) {
@@ -245,4 +250,4 @@ function initialize() {
 }
 
 // Start initialization
-initialize(); 
+initialize();
